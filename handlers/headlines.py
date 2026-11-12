@@ -26,7 +26,7 @@ async def handle_url(message: Message):
     url = message.text.strip()
     await message.answer("⏳ Ссылка получена, анализирую статью...")
 
-    article_text = await extract_article_text(url)
+    article_text, extracted_title = await extract_article_text(url)
     if not article_text:
         await message.answer(
             "❌ Не удалось извлечь текст. Возможно, сайт защищен от копирования и парсинга.\n"
@@ -34,12 +34,11 @@ async def handle_url(message: Message):
         )
         return
 
-    title = article_text.split("\n")[0].strip()[:100] or None
     await storage.save_article(
         message.from_user.id,
         article_text,
         source_url=url,
-        source_title=title,
+        source_title=extracted_title,
     )
 
     await message.answer(
@@ -66,7 +65,7 @@ async def handle_text(message: Message):
         await message.answer("Пришли ссылку (начинается с http: или https:) или текст статьи целиком.")
         return
 
-    title = message.text.split("\n")[0].strip()[:100] or None
+    title = message.text.split("\n")[0].strip()[:120] or None
     await storage.save_article(
         message.from_user.id,
         message.text,

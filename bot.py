@@ -7,6 +7,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from dotenv import load_dotenv
 
 import storage
+from giga_client import close_client
 from handlers.start import router as start_router
 from handlers.history import router as history_router
 from handlers.summary import router as summary_router
@@ -46,7 +47,11 @@ dp.include_router(headlines_router)
 async def main():
     await storage.init_db()
     logging.info("Бот запущен")
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+    try:
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+    finally:
+        await close_client()
+        await bot.session.close()
 
 
 if __name__ == "__main__":

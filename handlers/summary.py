@@ -26,7 +26,7 @@ async def handle_summary_command(message: Message):
 
     if payload.startswith("http"):
         await message.answer("⏳ Читаю статью...")
-        article_text = await extract_article_text(payload)
+        article_text, title = await extract_article_text(payload)
         if not article_text:
             await message.answer("❌ Не удалось извлечь текст. Пришли текст статьи целиком.")
             return
@@ -34,8 +34,8 @@ async def handle_summary_command(message: Message):
     else:
         article_text = payload
         source_url = None
+        title = article_text.split("\n")[0].strip()[:120] or None
 
-    title = article_text.split("\n")[0].strip()[:100] or None
     article_id = await storage.save_article(
         message.from_user.id,
         article_text,

@@ -14,10 +14,34 @@ HEADERS = {
 }
 
 
-async def extract_article_text(url: str) -> str | None:
+def _parse_html(html: str) -> tuple[str | None, str | None]:
+    """Синхронно извлекает текст и заголовок статьи из HTML через trafilatura."""
+    extracted = trafilatura.bare_extraction(html, favor_precision=True)
+    if not extracted:
+        return None, None
+
+    # Поддержка как dict, так и Document-объекта в разных версиях trafilatura
+    if isinstance(extracted, dict):
+        text = extracted.get("text")
+        title = extracted.get("title")
+    else:
+        text = getattr(extracted, "text", None)
+        title = getattr(extracted, "title", None)
+
+    if not text or len(text.strip()) < 150:
+        return None, None
+
+    clean_text = text.strip()
+    clean_title = (title.strip()[:120] if title and title.strip() else None) or (
+        clean_text.split("\n")[0].strip()[:120] or None
+    )
+    return clean_text, clean_title
+
+
+async def extract_article_text(url: str) -> tuple[str | None, str | None]:
     """
-    Асинхронно скачивает страницу по ссылке и вытаскивает основной текст статьи.
-    Возвращает текст или None, если извлечь не удалось.
+    Асинхронно скачивает страницу по ссылке и возвращает (текст_статьи, заголовок).
+    Если извлечь не удалось, возвращает (None, None).
     """
     try:
         async with httpx.AsyncClient(
@@ -30,13 +54,9 @@ async def extract_article_text(url: str) -> str | None:
             html = response.text
     except Exception as e:
         logging.warning(f"Ошибка при скачивании {url}: {e}")
-        return None
+        return None, None
 
     if not html:
-        return None
+        return None, None
 
-    text = await asyncio.to_thread(trafilatura.extract, html, favor_precision=True)
-    if not text or len(text.strip()) < 150:
-        return None
-
-    return text.strip()
+    return await asyncio.to_thread(_parse_html, html)

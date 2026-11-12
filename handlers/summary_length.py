@@ -2,6 +2,7 @@ import html
 import logging
 
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 import storage
@@ -9,6 +10,12 @@ from giga_client import generate_summary
 from keyboards import summary_length_keyboard
 
 router = Router()
+
+LENGTH_LABELS = {
+    "short": "короткий",
+    "standard": "стандартный",
+    "long": "развёрнутый",
+}
 
 
 @router.callback_query(F.data.startswith("summary_len:"))
@@ -19,7 +26,7 @@ async def handle_summary_length(callback: CallbackQuery):
         return
 
     length = parts[1]
-    if length not in ("short", "standard", "long"):
+    if length not in LENGTH_LABELS:
         await callback.answer("Неизвестная длина", show_alert=True)
         return
 
@@ -38,19 +45,33 @@ async def handle_summary_length(callback: CallbackQuery):
         await callback.answer("Статья не найдена", show_alert=True)
         return
 
-    await callback.answer()
-    await callback.message.answer("⏳ Перегенерирую анонс...")
+    await callback.answer(f"Генерирую {LENGTH_LABELS[length]} анонс...")
+
+    header = f"📝 <b>Анонс по статье #{article_id}:</b>" if article_id else "📝 <b>Анонс:</b>"
+    try:
+        await callback.message.edit_text(
+            f"{header}\n<i>⏳ Перегенерирую ({LENGTH_LABELS[length]})...</i>",
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest:
+        pass
 
     try:
         summary = await generate_summary(article_text, length=length)
     except Exception as e:
         logging.exception("GigaChat summary error")
-        await callback.message.answer(f"⚠️ Ошибка GigaChat: {html.escape(str(e))}")
+        await callback.message.edit_text(
+            f"⚠️ Ошибка GigaChat: {html.escape(str(e))}",
+            parse_mode="HTML",
+            reply_markup=summary_length_keyboard(article_id=article_id),
+        )
         return
 
-    header = f"📝 <b>Анонс по статье #{article_id}:</b>" if article_id else "📝 <b>Анонс:</b>"
-    await callback.message.answer(
-        f"{header}\n{html.escape(summary)}",
-        parse_mode="HTML",
-        reply_markup=summary_length_keyboard(article_id=article_id),
-    )
+    try:
+        await callback.message.edit_text(
+            f"{header}\n{html.escape(summary)}",
+            parse_mode="HTML",
+            reply_markup=summary_length_keyboard(article_id=article_id),
+        )
+    except TelegramBadRequest:
+        pass
