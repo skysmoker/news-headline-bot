@@ -1,0 +1,7 @@
+.env
+*.db
+venv/
+__pycache__/
+*.pyc
+russian_trusted_root_ca.crt
+bot.py.backup
