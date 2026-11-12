@@ -1,16 +1,23 @@
-import os
-import time
+import asyncio
 import json
+import os
+import re
 from pydantic import BaseModel, Field
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CA_CERT = os.path.join(BASE_DIR, "russian_trusted_root_ca.crt")
+
 
 class Headline(BaseModel):
     title: str = Field(description="Вариант заголовка")
     rationale: str = Field(description="Почему этот заголовок сработает")
 
+
 class HeadlinesResponse(BaseModel):
     headlines: list[Headline] = Field(description="Ровно 5 вариантов заголовков")
+
 
 SYSTEM_PROMPT = """Ты — главный редактор аналитического отдела крупного медиа с 20-летним опытом.
 Твоя специализация — создание заголовков, которые одновременно привлекают внимание и точно отражают суть материала.
@@ -28,46 +35,6 @@ SYSTEM_PROMPT = """Ты — главный редактор аналитичес
 Ни в одном заголовке не используй вопросительную интонацию и знак вопроса.
 Верни ответ строго в формате JSON: {"headlines": [{"title": "...", "rationale": "..."}]}. Без markdown-обёрток, без комментариев."""
 
-
-def generate_headlines(article_text: str) -> HeadlinesResponse:
-    truncated = article_text[:6000]
-    last_error = None
-
-    for attempt in range(3):  # 3 попытки
-        with GigaChat(
-            credentials=os.getenv("GIGACHAT_CREDENTIALS"),
-            ca_bundle_file="/home/skysmoker/news-headline-bot/russian_trusted_root_ca.crt"
-        ) as client:
-            chat = Chat(
-                model="GigaChat-2",
-                messages=[
-                    Messages(role=MessagesRole.SYSTEM, content=SYSTEM_PROMPT),
-                    Messages(role=MessagesRole.USER, content=truncated),
-                ],
-            )
-            response = client.chat(chat)
-            content = response.choices[0].message.content.strip()
-
-            # Чистим возможные markdown-обёртки
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-
-            if not content:
-                last_error = "Пустой ответ от GigaChat"
-                time.sleep(2)
-                continue
-
-            try:
-                data = json.loads(content)
-                return HeadlinesResponse(**data)
-            except Exception as e:
-                last_error = str(e)
-                time.sleep(2)
-
-    raise Exception(f"Не удалось получить заголовки после 3 попыток. Последняя ошибка: {last_error}")
 
 SUMMARY_PROMPTS = {
     "short": """Ты — главный редактор аналитического отдела крупного медиа.
@@ -96,20 +63,71 @@ SUMMARY_PROMPTS = {
 }
 
 
-def generate_summary(article_text: str, length: str = "standard") -> str:
+def _get_client() -> GigaChat:
+    ca_file = os.getenv("GIGACHAT_CA_CERT", DEFAULT_CA_CERT)
+    kwargs = {"credentials": os.getenv("GIGACHAT_CREDENTIALS")}
+    if os.path.exists(ca_file):
+        kwargs["ca_bundle_file"] = ca_file
+    return GigaChat(**kwargs)
+
+
+async def generate_headlines(article_text: str) -> HeadlinesResponse:
+    truncated = article_text[:6000]
+    last_error = None
+
+    async with _get_client() as client:
+        for attempt in range(3):
+            try:
+                chat = Chat(
+                    model="GigaChat-2",
+                    messages=[
+                        Messages(role=MessagesRole.SYSTEM, content=SYSTEM_PROMPT),
+                        Messages(role=MessagesRole.USER, content=truncated),
+                    ],
+                )
+                response = await client.achat(chat)
+                content = response.choices[0].message.content.strip()
+
+                if not content:
+                    raise ValueError("Пустой ответ от GigaChat")
+
+                match = re.search(r"\{.*\}", content, re.DOTALL)
+                if not match:
+                    raise ValueError("JSON не найден в ответе модели")
+
+                data = json.loads(match.group(0))
+                return HeadlinesResponse(**data)
+            except Exception as e:
+                last_error = str(e)
+                if attempt < 2:
+                    await asyncio.sleep(2)
+
+    raise RuntimeError(f"Не удалось получить заголовки после 3 попыток. Последняя ошибка: {last_error}")
+
+
+async def generate_summary(article_text: str, length: str = "standard") -> str:
     truncated = article_text[:6000]
     prompt = SUMMARY_PROMPTS.get(length, SUMMARY_PROMPTS["standard"])
+    last_error = None
 
-    with GigaChat(
-        credentials=os.getenv("GIGACHAT_CREDENTIALS"),
-        ca_bundle_file="/home/skysmoker/news-headline-bot/russian_trusted_root_ca.crt"
-    ) as client:
-        chat = Chat(
-            model="GigaChat-2-Max",
-            messages=[
-                Messages(role=MessagesRole.SYSTEM, content=prompt),
-                Messages(role=MessagesRole.USER, content=truncated),
-            ],
-        )
-        response = client.chat(chat)
-        return response.choices[0].message.content.strip()
+    async with _get_client() as client:
+        for attempt in range(3):
+            try:
+                chat = Chat(
+                    model="GigaChat-2-Max",
+                    messages=[
+                        Messages(role=MessagesRole.SYSTEM, content=prompt),
+                        Messages(role=MessagesRole.USER, content=truncated),
+                    ],
+                )
+                response = await client.achat(chat)
+                content = response.choices[0].message.content.strip()
+                if not content:
+                    raise ValueError("Пустой ответ от GigaChat")
+                return content
+            except Exception as e:
+                last_error = str(e)
+                if attempt < 2:
+                    await asyncio.sleep(2)
+
+    raise RuntimeError(f"Не удалось сгенерировать анонс после 3 попыток. Последняя ошибка: {last_error}")
