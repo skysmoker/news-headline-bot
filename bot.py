@@ -10,8 +10,6 @@ import storage
 from giga_client import close_client
 from handlers.start import router as start_router
 from handlers.history import router as history_router
-from handlers.summary import router as summary_router
-from handlers.summary_length import router as summary_length_router
 from handlers.summary_by_id import router as summary_by_id_router
 from handlers.headlines import router as headlines_router
 
@@ -38,8 +36,6 @@ async def access_middleware(handler, event, data):
 # Подключаем роутеры (порядок важен: команды и кнопки — до общего handle_text)
 dp.include_router(start_router)
 dp.include_router(history_router)
-dp.include_router(summary_router)
-dp.include_router(summary_length_router)
 dp.include_router(summary_by_id_router)
 dp.include_router(headlines_router)
 

@@ -1,7 +1,10 @@
 .env
 *.db
+*.sqlite3
+*.crt
+*.pem
+*.log
+*.bak
 venv/
 __pycache__/
 *.pyc
-russian_trusted_root_ca.crt
-bot.py.backup

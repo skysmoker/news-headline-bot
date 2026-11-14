@@ -1,0 +1,168 @@
+import asyncio
+import logging
+import os
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.client.session.aiohttp import AiohttpSession
+from dotenv import load_dotenv
+
+from extractor import extract_article_text
+from giga_client import generate_headlines, generate_summary
+import storage
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+
+# --- Прокси для Telegram (Франкфурт) ---
+proxy_url = os.getenv("TELEGRAM_PROXY")
+session = AiohttpSession(proxy=proxy_url) if proxy_url else None
+bot = Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"), session=session)
+dp = Dispatcher()
+
+@dp.message(F.from_user.id == 1675347, F.text.startswith("http"))
+async def handle_url(message: Message):
+    url = message.text.strip()
+    await message.answer("⏳ Ссылка получена, анализирую статью...")
+
+    article_text = extract_article_text(url)
+    if not article_text:
+        await message.answer(
+            "❌ Не удалось извлечь текст. Возможно, сайт защищен от копирования и парсинга.\n"
+            "Скопируйте текст статьи и пришли его сюда, обработка будет продолжена."
+        )
+        return
+
+    # Берём первую строку текста как название (обрезаем до 100 символов)
+    title = article_text.split("\n")[0].strip()[:100] or None
+    storage.save_article(message.from_user.id, article_text, source_url=url, source_title=title)
+
+    await message.answer(f"📄 Извлечено символов по ссылке: {len(article_text)}. Генерирую заголовки и аргументацию...")
+
+    try:
+        result = generate_headlines(article_text)
+    except Exception as e:
+        logging.exception("GigaChat error")
+        await message.answer(f"⚠️ Ошибка GigaChat: {e}")
+        return
+
+    response = "📰 <b>5 вариантов заголовка:</b>\n\n"
+    for i, h in enumerate(result.headlines, 1):
+        response += f"<b>{i}.</b> <b>{h.title}</b>\n<i>{h.rationale}</i>\n\n"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Написать анонс", callback_data="generate_summary")]
+    ])
+    await message.answer(response, parse_mode="HTML", reply_markup=keyboard)
+
+@dp.message(F.from_user.id == 1675347, F.text.startswith("/summary"))
+async def handle_summary_command(message: Message):
+    # Отрезаем команду, оставляем только ссылку или текст
+    payload = message.text[len("/summary"):].strip()
+
+    if not payload:
+        await message.answer(
+            "Использование:\n"
+            "/summary <ссылка> — сгенерировать анонс по статье\n"
+            "Анонс также может быть сгенерирован после заголовков."
+        )
+        return
+
+    # Если это ссылка — извлекаем текст, иначе берём как есть
+    if payload.startswith("http"):
+        await message.answer("⏳ Читаю статью...")
+        article_text = extract_article_text(payload)
+        if not article_text:
+            await message.answer("❌ Не удалось извлечь текст. Пришли текст статьи целиком.")
+            return
+    else:
+        article_text = payload
+
+    await message.answer("⏳ Пишу анонс...")
+
+    try:
+        summary = generate_summary(article_text)
+    except Exception as e:
+        logging.exception("GigaChat summary error")
+        await message.answer(f"⚠️ Ошибка GigaChat: {e}")
+        return
+
+    await message.answer(f"📝 <b>Анонс:</b>\n{summary}", parse_mode="HTML")
+
+@dp.message(F.from_user.id == 1675347, F.text.startswith("/history"))
+async def handle_history(message: Message):
+    articles = storage.get_articles(message.from_user.id, limit=10)
+
+    if not articles:
+        await message.answer("📭 История пуста. Пришли ссылку или текст статьи — я сохраню.")
+        return
+
+    response = "📚 <b>Последние статьи:</b>\n\n"
+    for a in articles:
+        time_str = a["updated_at"][:16]
+        title = a["source_title"] or "(без названия)"
+        # Обрезаем длинное название для читаемости
+        if len(title) > 80:
+            title = title[:77] + "..."
+        
+        response += f"<b>#{a['id']}</b> — {title}\n"
+        response += f"   <i>{a['length']} символов, {time_str}</i>\n"
+        if a["source_url"]:
+            response += f"   <a href='{a['source_url']}'>Ссылка на статью</a>\n"
+        response += "\n"
+
+    response += "Чтобы написать анонс по последней статье, нажми кнопку под заголовками или отправь /summary."
+    await message.answer(response, parse_mode="HTML", disable_web_page_preview=True)
+
+@dp.message(F.from_user.id == 1675347, F.text)
+async def handle_text(message: Message):
+    if len(message.text) < 100:
+        await message.answer("Пришли ссылку (начинается с http: или https:) или текст статьи целиком.")
+        return
+
+    title = message.text.split("\n")[0].strip()[:100] or None
+    storage.save_article(message.from_user.id, message.text, source_url=None, source_title=title)
+
+    await message.answer("⏳ Обрабатываю текст...")
+    try:
+        result = generate_headlines(message.text)
+    except Exception as e:
+        logging.exception("GigaChat error")
+        await message.answer(f"⚠️ Ошибка GigaChat: {e}")
+        return
+
+    response = "📰 <b>5 вариантов заголовка:</b>\n\n"
+    for i, h in enumerate(result.headlines, 1):
+        response += f"<b>{i}.</b> <b>{h.title}</b>\n<i>{h.rationale}</i>\n\n"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Написать анонс", callback_data="generate_summary")]
+    ])
+    await message.answer(response, parse_mode="HTML", reply_markup=keyboard)
+
+@dp.callback_query(F.data == "generate_summary")
+async def handle_summary(callback: CallbackQuery):
+    await callback.answer()
+
+    article_text = storage.get_article(callback.from_user.id)
+    if not article_text:
+        await callback.message.answer("❌ Не нашёл текст статьи. Пришли ссылку заново.")
+        return
+
+    await callback.message.answer("⏳ Пишу анонс...")
+
+    try:
+        summary = generate_summary(article_text)
+    except Exception as e:
+        logging.exception("GigaChat summary error")
+        await callback.message.answer(f"⚠️ Ошибка GigaChat: {e}")
+        return
+
+    await callback.message.answer(f"📝 <b>Анонс:</b>\n{summary}", parse_mode="HTML")
+
+async def main():
+    logging.info("Бот запущен")
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+
+if __name__ == "__main__":
+    asyncio.run(main())

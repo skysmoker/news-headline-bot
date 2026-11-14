@@ -31,7 +31,7 @@ async def handle_history(message: Message):
             response += f"   <a href='{safe_url}'>Ссылка на статью</a>\n"
         response += "\n"
 
-    response += "Нажми на номер статьи ниже, чтобы сгенерировать по ней анонс:"
+    response += "Нажми на номер статьи ниже, чтобы заново получить заголовки и анонсы:"
     await message.answer(
         response,
         parse_mode="HTML",

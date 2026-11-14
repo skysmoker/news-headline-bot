@@ -5,8 +5,8 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
 import storage
-from giga_client import generate_summary
-from keyboards import summary_length_keyboard
+from giga_client import generate_editorial_pack
+from handlers.headlines import format_editorial_pack
 
 router = Router()
 
@@ -25,17 +25,16 @@ async def handle_summary_by_id(callback: CallbackQuery):
         return
 
     await callback.answer()
-    await callback.message.answer(f"⏳ Пишу анонс по статье #{article_id}...")
+    await callback.message.answer(f"⏳ Генерирую заголовки и анонсы по статье #{article_id}...")
 
     try:
-        summary = await generate_summary(article_text, length="standard")
+        headlines, summaries = await generate_editorial_pack(article_text)
     except Exception as e:
-        logging.exception("GigaChat summary error")
+        logging.exception("GigaChat pack error")
         await callback.message.answer(f"⚠️ Ошибка GigaChat: {html.escape(str(e))}")
         return
 
     await callback.message.answer(
-        f"📝 <b>Анонс по статье #{article_id}:</b>\n{html.escape(summary)}",
+        format_editorial_pack(headlines, summaries),
         parse_mode="HTML",
-        reply_markup=summary_length_keyboard(article_id=article_id),
     )

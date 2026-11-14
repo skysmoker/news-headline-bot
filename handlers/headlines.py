@@ -6,19 +6,33 @@ from aiogram.types import Message
 
 import storage
 from extractor import extract_article_text
-from giga_client import generate_headlines, HeadlinesResponse
+from giga_client import generate_editorial_pack, HeadlinesResponse
 from keyboards import main_keyboard
 
 router = Router()
 
+HEADLINE_ANGLES = [
+    "Факт",
+    "Цифра и масштаб",
+    "Последствие",
+    "Контраст",
+    "Тезис",
+]
 
-def _format_headlines(result: HeadlinesResponse) -> str:
-    response = "📰 <b>5 вариантов заголовка:</b>\n\n"
-    for i, h in enumerate(result.headlines, 1):
-        title = html.escape(h.title)
-        rationale = html.escape(h.rationale)
-        response += f"<b>{i}.</b> <b>{title}</b>\n<i>{rationale}</i>\n\n"
-    return response[:4096]
+
+def format_editorial_pack(headlines: HeadlinesResponse, summaries: dict[str, str]) -> str:
+    lines = ["📰 <b>5 вариантов заголовка:</b>\n"]
+    for i, title in enumerate(headlines.headlines, 1):
+        angle = HEADLINE_ANGLES[i - 1] if i <= len(HEADLINE_ANGLES) else f"Вариант {i}"
+        lines.append(f"<b>{i}. {angle}:</b>\n<code>{html.escape(title)}</code>\n")
+
+    lines.append("───────────────\n")
+    lines.append("📝 <b>3 варианта анонса:</b>\n")
+    lines.append(f"<b>Короткий:</b>\n<code>{html.escape(summaries['short'])}</code>\n")
+    lines.append(f"<b>Стандартный:</b>\n<code>{html.escape(summaries['standard'])}</code>\n")
+    lines.append(f"<b>Развёрнутый:</b>\n<code>{html.escape(summaries['long'])}</code>")
+
+    return "\n".join(lines)[:4096]
 
 
 @router.message(F.text.startswith("http"))
@@ -42,18 +56,18 @@ async def handle_url(message: Message):
     )
 
     await message.answer(
-        f"📄 Извлечено символов по ссылке: {len(article_text)}. Генерирую заголовки и аргументацию..."
+        f"📄 Извлечено символов: {len(article_text)}. Генерирую 5 заголовков и 3 варианта анонса..."
     )
 
     try:
-        result = await generate_headlines(article_text)
+        headlines, summaries = await generate_editorial_pack(article_text)
     except Exception as e:
         logging.exception("GigaChat error")
         await message.answer(f"⚠️ Ошибка GigaChat: {html.escape(str(e))}")
         return
 
     await message.answer(
-        _format_headlines(result),
+        format_editorial_pack(headlines, summaries),
         parse_mode="HTML",
         reply_markup=main_keyboard(),
     )
@@ -73,16 +87,16 @@ async def handle_text(message: Message):
         source_title=title,
     )
 
-    await message.answer("⏳ Обрабатываю текст...")
+    await message.answer("⏳ Генерирую 5 заголовков и 3 варианта анонса...")
     try:
-        result = await generate_headlines(message.text)
+        headlines, summaries = await generate_editorial_pack(message.text)
     except Exception as e:
         logging.exception("GigaChat error")
         await message.answer(f"⚠️ Ошибка GigaChat: {html.escape(str(e))}")
         return
 
     await message.answer(
-        _format_headlines(result),
+        format_editorial_pack(headlines, summaries),
         parse_mode="HTML",
         reply_markup=main_keyboard(),
     )
